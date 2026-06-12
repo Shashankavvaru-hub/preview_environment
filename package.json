@@ -1,0 +1,13 @@
+{
+  "name": "ephemeral-preview-app",
+  "version": "1.0.0",
+  "description": "Lightweight app for ephemeral environments",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "sqlite3": "^5.1.7"
+  }
+}

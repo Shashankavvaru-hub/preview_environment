@@ -1,0 +1,92 @@
+name: Deploy Ephemeral Preview Environment
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ap-south-2
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Create ECR Repository if it doesn't exist
+        run: |
+          aws ecr describe-repositories --repository-names preview-app || \
+          aws ecr create-repository --repository-name preview-app
+
+      - name: Build, Tag, and Push Image to ECR
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          ECR_REPOSITORY: preview-app
+          IMAGE_TAG: pr-${{ github.event.pull_request.number }}
+        run: |
+          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+
+      - name: Deploy Container to AWS EC2 via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.AWS_EC2_HOST }}
+          username: ubuntu
+          key: ${{ secrets.AWS_EC2_SSH_KEY }}
+          script: |
+            # 1. Log in to AWS ECR on the remote EC2 server
+            aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin ${{ steps.login-ecr.outputs.registry }}
+            
+            # 2. Define environment variables
+            PR_ID="${{ github.event.pull_request.number }}"
+            PORT=$((8000 + PR_ID))
+            IMAGE="${{ steps.login-ecr.outputs.registry }}/preview-app:pr-$PR_ID"
+            
+            # 3. Stop and remove existing container for this PR if it exists
+            docker stop pr-$PR_ID || true
+            docker rm pr-$PR_ID || true
+            
+            # 4. Pull and run the fresh container copy on its allocated unique port
+            docker pull $IMAGE
+            docker run -d \
+              --name pr-$PR_ID \
+              --network preview-network \
+              -p $PORT:3000 \
+              -e PR_ID=$PR_ID \
+              --memory="150m" \
+              --restart always \
+              $IMAGE
+
+            # 5. Generate unique Nginx configuration file dynamically
+            NGINX_CONF="/home/ubuntu/nginx-proxy/conf.d/pr-$PR_ID.conf"
+            sudo bash -c "cat << 'EOF' > $NGINX_CONF
+            server {
+                listen 80;
+                server_name pr-$PR_ID.shashank-devops.duckdns.org;
+
+                location / {
+                    proxy_pass http://pr-$PR_ID:3000;
+                    proxy_set_header Host \$host;
+                    proxy_set_header X-Real-IP \$remote_addr;
+                }
+            }
+            EOF"
+
+            # 6. Instruct Nginx container to gracefully reload configurations
+            docker exec master-nginx nginx -s reload || true
+
+      - name: Post Live Preview Link to PR Comment
+        uses: mshick/add-pr-comment@v2
+        with:
+          message: |
+            🚀 **Ephemeral Preview Environment Deployed Successfully!**
+            🔗 You can view and test your changes live here: http://pr-${{ github.event.pull_request.number }}.shashank-devops.duckdns.org
