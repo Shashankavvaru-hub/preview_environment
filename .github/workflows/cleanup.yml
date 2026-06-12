@@ -1,0 +1,57 @@
+name: Cleanup Ephemeral Preview Environment
+
+on:
+  pull_request:
+    types: [closed]
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1 # Ensure this matches your deployment region
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Purge Container and Routing via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.AWS_EC2_HOST }}
+          username: ubuntu
+          key: ${{ secrets.AWS_EC2_SSH_KEY }}
+          script: |
+            PR_ID="${{ github.event.pull_request.number }}"
+            
+            echo "Starting teardown for Environment PR #$PR_ID..."
+
+            # 1. Stop and completely remove the running application container
+            docker stop pr-$PR_ID || true
+            docker rm pr-$PR_ID || true
+
+            # 2. Delete the specific Nginx configuration file for this PR
+            NGINX_CONF="/home/ubuntu/nginx-proxy/conf.d/pr-$PR_ID.conf"
+            if [ -f "$NGINX_CONF" ]; then
+              sudo rm -f "$NGINX_CONF"
+              echo "Removed Nginx configuration file: $NGINX_CONF"
+            fi
+
+            # 3. Reload Nginx to apply changes and close the web route smoothly
+            docker exec master-nginx nginx -s reload || true
+
+            # 4. Clean up unused cached Docker assets on the host to save disk space
+            docker system prune -f
+
+      - name: Delete Remote Image Layer from Amazon ECR
+        run: |
+          IMAGE_TAG="pr-${{ github.event.pull_request.number }}"
+          echo "Deleting image tag $IMAGE_TAG from Amazon ECR repository..."
+          
+          aws ecr batch-delete-image \
+            --repository-name preview-app \
+            --image-ids imageTag=$IMAGE_TAG || true
