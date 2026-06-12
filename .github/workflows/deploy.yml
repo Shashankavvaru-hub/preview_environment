@@ -16,7 +16,7 @@ jobs:
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ap-south-2
+          aws-region: us-east-1
 
       - name: Login to Amazon ECR
         id: login-ecr
@@ -43,19 +43,15 @@ jobs:
           username: ubuntu
           key: ${{ secrets.AWS_EC2_SSH_KEY }}
           script: |
-            # 1. Log in to AWS ECR on the remote EC2 server
             aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin ${{ steps.login-ecr.outputs.registry }}
             
-            # 2. Define environment variables
             PR_ID="${{ github.event.pull_request.number }}"
             PORT=$((8000 + PR_ID))
             IMAGE="${{ steps.login-ecr.outputs.registry }}/preview-app:pr-$PR_ID"
             
-            # 3. Stop and remove existing container for this PR if it exists
             docker stop pr-$PR_ID || true
             docker rm pr-$PR_ID || true
             
-            # 4. Pull and run the fresh container copy on its allocated unique port
             docker pull $IMAGE
             docker run -d \
               --name pr-$PR_ID \
@@ -66,7 +62,6 @@ jobs:
               --restart always \
               $IMAGE
 
-            # 5. Generate unique Nginx configuration file dynamically
             NGINX_CONF="/home/ubuntu/nginx-proxy/conf.d/pr-$PR_ID.conf"
             sudo bash -c "cat << 'EOF' > $NGINX_CONF
             server {
@@ -81,7 +76,6 @@ jobs:
             }
             EOF"
 
-            # 6. Instruct Nginx container to gracefully reload configurations
             docker exec master-nginx nginx -s reload || true
 
       - name: Post Live Preview Link to PR Comment
