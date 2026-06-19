@@ -21,6 +21,7 @@ app.get('/', (req, res) => {
           <div style="background: white; display: inline-block; padding: 20px; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.1);">
             <p><strong>Status:</strong> Active</p>
             <p><strong>Environment ID:</strong> <span style="background: #ff9900; color: white; padding: 2px 8px; border-radius: 4px;">PR #${prId}</span></p>
+            <p><strong>Deployment Context:</strong> Automatically Provisioned Preview Environment for Pull Request Validation</p>
             <p><strong>Database Record:</strong> "${rows[0] ? rows[0].text : 'No data'}"</p>
           </div>
         </body>
